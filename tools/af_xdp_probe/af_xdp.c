@@ -1,10 +1,12 @@
 /*
- * af_xdp.c - UMEM allocation, socket/ring setup, and resource cleanup
+ * af_xdp.c - UMEM allocation, socket/ring setup, redirect program attachment,
+ * and resource cleanup
  */
 
 #include <errno.h>
 #include <inttypes.h>
 #include <net/if.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
@@ -12,18 +14,15 @@
 #include <sys/resource.h>
 #include <sys/socket.h>
 
+#include <linux/if_link.h>
+#include <linux/if_xdp.h>
+
 #include "af_xdp.h"
 #include "options.h"
 
 #ifndef SOL_XDP
 #define SOL_XDP 283
 #endif
-
-#define RING_SIZE	2048U
-#define FRAME_SIZE	4096U
-#define FRAME_COUNT	(2U * RING_SIZE)
-#define FRAME_HEADROOM	128U
-#define UMEM_SIZE	((size_t)FRAME_SIZE * FRAME_COUNT)
 
 static void raise_memlock_limit(void)
 {
@@ -38,32 +37,38 @@ static void raise_memlock_limit(void)
 static int allocate_umem(struct af_xdp *p)
 {
 	const struct xsk_umem_config config = {
-		.fill_size = RING_SIZE,
-		.comp_size = RING_SIZE,
-		.frame_size = FRAME_SIZE,
-		.frame_headroom = FRAME_HEADROOM,
+		.fill_size = AF_XDP_RING_SIZE,
+		.comp_size = AF_XDP_RING_SIZE,
+		.frame_size = AF_XDP_FRAME_SIZE,
+		.frame_headroom = AF_XDP_FRAME_HEADROOM,
 		.flags = 0,
 	};
 
-	p->buffer = mmap(NULL, UMEM_SIZE, PROT_READ | PROT_WRITE,
+	p->buffer = mmap(NULL, AF_XDP_UMEM_SIZE, PROT_READ | PROT_WRITE,
 			 MAP_PRIVATE | MAP_ANONYMOUS | MAP_POPULATE, -1, 0);
 	if (p->buffer == MAP_FAILED) {
 		p->buffer = NULL;
 		return -errno;
 	}
 
-	return xsk_umem__create(&p->umem, p->buffer, UMEM_SIZE, &p->fill,
-				&p->completion, &config);
+	return xsk_umem__create(&p->umem, p->buffer, AF_XDP_UMEM_SIZE,
+				&p->fill, &p->completion, &config);
 }
 
 static int create_socket(struct af_xdp *p, const struct probe_options *opts)
 {
 	const struct xsk_socket_config config = {
-		.rx_size = RING_SIZE,
-		.tx_size = RING_SIZE,
-		/* Attaching a redirect program belongs to the next milestone. */
-		.libxdp_flags = XSK_LIBXDP_FLAGS__INHIBIT_PROG_LOAD,
-		.xdp_flags = 0,
+		.rx_size = AF_XDP_RING_SIZE,
+		.tx_size = AF_XDP_RING_SIZE,
+		/*
+		 * Let libxdp attach its default program, which redirects every
+		 * packet on a queue that has a socket in the XSKMAP and passes
+		 * the rest to the kernel. The socket is added to the map for
+		 * @queue_id automatically and removed again on delete.
+		 */
+		.libxdp_flags = 0,
+		/* Native (driver) mode only; no fallback to generic XDP. */
+		.xdp_flags = XDP_FLAGS_DRV_MODE,
 		.bind_flags = XDP_USE_NEED_WAKEUP |
 			(opts->zero_copy ? XDP_ZEROCOPY : XDP_COPY),
 	};
@@ -88,26 +93,15 @@ static int verify_mode(struct af_xdp *p, const struct probe_options *opts)
 	return zero_copy == opts->zero_copy ? 0 : -EIO;
 }
 
-static int supply_receive_frames(struct af_xdp *p)
-{
-	uint32_t index, i;
-
-	if (xsk_ring_prod__reserve(&p->fill, RING_SIZE, &index) != RING_SIZE)
-		return -ENOSPC;
-
-	/* Publish each frame once. Leave the other half available for future TX. */
-	for (i = 0; i < RING_SIZE; i++)
-		*xsk_ring_prod__fill_addr(&p->fill, index + i) =
-			(uint64_t)i * FRAME_SIZE;
-	xsk_ring_prod__submit(&p->fill, RING_SIZE);
-	return 0;
-}
-
 int af_xdp_cleanup(struct af_xdp *p)
 {
 	int ret;
 
-	/* The socket must release its UMEM reference before deleting the UMEM. */
+	/*
+	 * Deleting the socket removes its XSKMAP entry and, since this socket
+	 * caused the program load, detaches the redirect program. The socket
+	 * must release its UMEM reference before deleting the UMEM.
+	 */
 	if (p->socket) {
 		xsk_socket__delete(p->socket);
 		p->socket = NULL;
@@ -119,7 +113,7 @@ int af_xdp_cleanup(struct af_xdp *p)
 		p->umem = NULL;
 	}
 	if (p->buffer) {
-		if (munmap(p->buffer, UMEM_SIZE))
+		if (munmap(p->buffer, AF_XDP_UMEM_SIZE))
 			return -errno;
 		p->buffer = NULL;
 	}
@@ -144,7 +138,7 @@ int af_xdp_init(struct af_xdp *p, const struct probe_options *opts)
 	if (ret)
 		goto fail;
 
-	stage = "Create/bind socket and configure RX/TX rings";
+	stage = "Create/bind socket, configure RX/TX rings, attach redirect program";
 	ret = create_socket(p, opts);
 	if (ret)
 		goto fail;
@@ -154,16 +148,16 @@ int af_xdp_init(struct af_xdp *p, const struct probe_options *opts)
 	if (ret)
 		goto fail;
 
-	stage = "Supply receive frames";
-	ret = supply_receive_frames(p);
-	if (ret)
-		goto fail;
-
 	return 0;
 
 fail:
 	fprintf(stderr, "%s: %s\n", stage, strerror(-ret));
 	return ret;
+}
+
+int af_xdp_fd(const struct af_xdp *p)
+{
+	return xsk_socket__fd(p->socket);
 }
 
 void af_xdp_print_config(const struct probe_options *opts)
@@ -175,11 +169,40 @@ void af_xdp_print_config(const struct probe_options *opts)
 	       "  UMEM: %zu bytes, %u frames of %u bytes\n"
 	       "  frame headroom: %u bytes\n"
 	       "  rings: Fill/RX/TX/Completion = %u descriptors each\n"
-	       "  published RX frames: %u; remaining frames: %u\n"
-	       "  XDP program loading: disabled\n"
-	       "Packet processing is not implemented. Press Ctrl+C to clean up.\n",
+	       "  XDP program: libxdp default redirect, native mode\n",
 	       opts->ifname, opts->queue_id, opts->zero_copy ? "zero-copy" : "copy",
-	       UMEM_SIZE, FRAME_COUNT, FRAME_SIZE, FRAME_HEADROOM, RING_SIZE,
-	       RING_SIZE, FRAME_COUNT - RING_SIZE);
+	       AF_XDP_UMEM_SIZE, AF_XDP_FRAME_COUNT, AF_XDP_FRAME_SIZE,
+	       AF_XDP_FRAME_HEADROOM, AF_XDP_RING_SIZE);
+	fflush(stdout);
+}
+
+void af_xdp_print_kernel_stats(const struct af_xdp *p)
+{
+	struct xdp_statistics stats = {0};
+	socklen_t len = sizeof(stats);
+
+	if (!p->socket)
+		return;
+	if (getsockopt(xsk_socket__fd(p->socket), SOL_XDP, XDP_STATISTICS,
+		       &stats, &len)) {
+		fprintf(stderr, "Kernel socket statistics unavailable: %s\n",
+			strerror(errno));
+		return;
+	}
+
+	printf("Kernel socket statistics\n"
+	       "  rx_dropped: %" PRIu64 "\n"
+	       "  rx_invalid_descs: %" PRIu64 "\n"
+	       "  tx_invalid_descs: %" PRIu64 "\n",
+	       (uint64_t)stats.rx_dropped, (uint64_t)stats.rx_invalid_descs,
+	       (uint64_t)stats.tx_invalid_descs);
+	/* The remaining counters exist on Linux 5.9 and later. */
+	if (len >= sizeof(stats))
+		printf("  rx_ring_full: %" PRIu64 "\n"
+		       "  rx_fill_ring_empty_descs: %" PRIu64 "\n"
+		       "  tx_ring_empty_descs: %" PRIu64 "\n",
+		       (uint64_t)stats.rx_ring_full,
+		       (uint64_t)stats.rx_fill_ring_empty_descs,
+		       (uint64_t)stats.tx_ring_empty_descs);
 	fflush(stdout);
 }
