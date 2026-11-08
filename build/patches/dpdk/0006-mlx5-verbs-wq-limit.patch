@@ -1,0 +1,39 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Brian Ling <brianling16@gmail.com>
+Date: Sat, 07 Nov 2026 21:18:23 -0500
+Subject: [PATCH] net/mlx5: derive WQ size capability in legacy verbs mode
+
+Without DevX, HCA attributes are not queried and log_max_wq_sz stays
+zero. Descriptor adjustment then clamps the requested RX/TX rings to
+one entry, and receive queue creation fails. RX queue validation also
+uses this capability, so changing descriptor reporting alone is not
+sufficient.
+
+Derive a conservative power-of-two limit from the verbs-reported
+max_qp_wr when DevX is unavailable. Leave the DevX capability unchanged.
+
+Verified with ConnectX-4 Lx firmware 14.18.2030 on Linux 5.15: the
+Caladan DPDK IOKernel starts, TCP read tests pass, and its runtime
+responds to ICMP over the physical experiment NIC.
+
+---
+ drivers/net/mlx5/linux/mlx5_os.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/drivers/net/mlx5/linux/mlx5_os.c b/drivers/net/mlx5/linux/mlx5_os.c
+index 573e846ed2..e01cbd5697 100644
+--- a/drivers/net/mlx5/linux/mlx5_os.c
++++ b/drivers/net/mlx5/linux/mlx5_os.c
+@@ -175,6 +175,10 @@ mlx5_os_capabilities_prepare(struct mlx5_dev_ctx_shared *sh)
+ 	else
+ 		sh->dev_cap.sf = 1;
+ 	sh->dev_cap.max_qp_wr = attr_ex.orig_attr.max_qp_wr;
++	/* DevX HCA attributes are not populated in legacy Verbs mode. */
++	if (!cdev->config.devx && sh->dev_cap.max_qp_wr > 0)
++		hca_attr->log_max_wq_sz =
++			rte_fls_u32(sh->dev_cap.max_qp_wr) - 1;
+ 	sh->dev_cap.max_sge = attr_ex.orig_attr.max_sge;
+ 	sh->dev_cap.max_cq = attr_ex.orig_attr.max_cq;
+ 	sh->dev_cap.max_qp = attr_ex.orig_attr.max_qp;
+-- 
+2.43.0
