@@ -9,3 +9,7 @@ iokerneld
 ._*
 .cargo-local
 .rustup-local
+/CODEBASE_WALKTHROUGH.md
+/AF_XDP_BACKEND_DESIGN.md
+/PROJECT_OUTLINE.md
+/PROJECT_CONTEXT_README.md
