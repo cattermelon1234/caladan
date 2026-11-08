@@ -52,7 +52,7 @@ sync)
 	src=$(cd "$here/.." && pwd)
 	COPYFILE_DISABLE=1 tar -C "$(dirname "$src")" --no-xattrs -czf - \
 		--exclude af_xdp_probe/af_xdp_probe --exclude af_xdp_probe/test/probe_sim \
-		--exclude af_xdp_probe/cloudlab/hosts.env --exclude '*.o' \
+		--exclude af_xdp_probe/cloudlab/hosts.env --exclude '*.o' --exclude '*.dSYM' \
 		"$(basename "$src")" |
 	$SSH "$SSH_USER@$host" "mkdir -p $REMOTE_DIR/tools && rm -rf $REMOTE_DIR/tools/af_xdp_probe && tar -xzf - -C $REMOTE_DIR/tools"
 	;;

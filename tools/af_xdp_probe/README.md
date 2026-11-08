@@ -1,5 +1,9 @@
 # AF_XDP receive probe
 
+Migrated to current upstream Caladan from the original AF_XDP development
+branch. See [MIGRATION.md](MIGRATION.md) for provenance, the tested CloudLab
+setup, and the remaining runtime integration work.
+
 A standalone tool that receives packets on one NIC queue through AF_XDP and
 proves that frame ownership is tracked correctly. It is the first milestone of
 the Caladan AF_XDP backend: it does not transmit and does not talk to a Caladan
@@ -35,14 +39,18 @@ The receive loop owns all four rings. Nothing else touches them.
 
 ## Building
 
+To use the CloudLab helpers, copy `cloudlab/hosts.env.example` to
+`cloudlab/hosts.env` inside this directory and fill in your SSH details and
+the remote checkout path.
+
 Linux only. Needs a C compiler, `make`, `pkg-config`, and libxdp with its
 headers. Ubuntu 23.04 and later package it as `libxdp-dev`. Ubuntu 22.04 (the
 CloudLab xl170 image) does not, so build it from xdp-tools, which bundles a
 compatible libbpf:
 
 ```sh
-cloudlab/cl.sh deps node0                       # clang, llvm, libelf-dev, ...
-cloudlab/cl.sh run node0 caladan-ae/tools/af_xdp_probe/cloudlab/install_libxdp.sh
+tools/af_xdp_probe/cloudlab/cl.sh deps node0                       # clang, llvm, libelf-dev, ...
+tools/af_xdp_probe/cloudlab/cl.sh run node0 caladan-current/tools/af_xdp_probe/cloudlab/install_libxdp.sh
 PKG_CONFIG_PATH=/usr/local/lib/pkgconfig make -C tools/af_xdp_probe
 tools/af_xdp_probe/af_xdp_probe --help
 ```
@@ -52,7 +60,9 @@ The Makefile refuses to build on macOS and when pkg-config cannot find libxdp.
 ## Running
 
 ```sh
-sudo tools/af_xdp_probe/af_xdp_probe --interface IFACE --queue 0 --mode zero-copy
+# The 4096-byte UMEM frames require a compatible NIC MTU; use 1500 for this probe.
+sudo ip link set dev IFACE mtu 1500
+sudo tools/af_xdp_probe/af_xdp_probe --interface IFACE --queue 0 --mode copy
 ```
 
 | Option | Meaning |
@@ -158,7 +168,7 @@ the XDP program. Those need the Linux host.
 
 Standalone transmit and Completion ring reclamation, then connecting the
 working packet path to the IOKernel's shared ingress region and LRPC queues.
-See the backend design doc in the repository history for the integration plan.
+See [MIGRATION.md](MIGRATION.md) for the integration points in current upstream.
 
 References: the [libxdp AF_XDP API](https://github.com/xdp-project/xdp-tools/blob/main/headers/xdp/xsk.h)
 and the [Linux AF_XDP documentation](https://docs.kernel.org/networking/af_xdp.html).
