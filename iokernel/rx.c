@@ -397,7 +397,8 @@ fail:
  */
 int rx_init(void)
 {
-	if (cfg.vfio_directpath)
+	/* AF_XDP uses the ingress region as its UMEM instead (afxdp.c) */
+	if (cfg.vfio_directpath || cfg.af_xdp)
 		return 0;
 
 	/* create a mempool in shared memory to hold the rx mbufs */

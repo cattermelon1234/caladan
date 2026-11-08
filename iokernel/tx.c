@@ -385,7 +385,7 @@ static struct rte_mempool *tx_pktmbuf_completion_pool_create(const char *name,
  */
 int tx_init(void)
 {
-	if (cfg.vfio_directpath)
+	if (cfg.vfio_directpath || cfg.af_xdp)
 		return 0;
 
 	/* create a mempool to hold struct rte_mbufs and handle completions */

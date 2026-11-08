@@ -11,6 +11,7 @@
 #include <base/thread.h>
 #include <asm/chksum.h>
 #include <net/chksum.h>
+#include <net/toeplitz.h>
 #include <runtime/net.h>
 #include <runtime/smalloc.h>
 
@@ -120,22 +121,7 @@ int net_init_mempool(void)
 static uint32_t do_toeplitz(uint32_t saddr, uint32_t daddr, uint16_t sport,
 	                    uint16_t dport)
 {
-	const uint8_t *rss_key = iok.iok_info->rss_key;
-
-	uint32_t i, j, map, ret = 0, input_tuple[] = {
-		saddr, daddr, dport | sport << 16
-	};
-
-	for (j = 0; j < ARRAY_SIZE(input_tuple); j++) {
-		for (map = input_tuple[j]; map;	map &= (map - 1)) {
-			i = (uint32_t)__builtin_ctz(map);
-			ret ^= hton32(((const uint32_t *)rss_key)[j]) << (31 - i) |
-					(uint32_t)((uint64_t)(hton32(((const uint32_t *)rss_key)[j + 1])) >>
-					(i + 1));
-		}
-	}
-
-	return ret;
+	return toeplitz_hash(iok.iok_info->rss_key, saddr, daddr, sport, dport);
 }
 
 /**

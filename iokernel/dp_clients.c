@@ -184,7 +184,8 @@ static void dp_clients_add_client(struct proc *p)
 		goto fail;
 	}
 
-	if (!p->has_directpath) {
+	/* AF_XDP has no DPDK device to map memory for or tag flows on */
+	if (!p->has_directpath && !cfg.af_xdp) {
 		ret = do_dpdk_dma_map(p->region.base, p->region.len,
 			              proc_pgsize(p), p->page_paddrs);
 		if (ret < 0) {
@@ -251,7 +252,7 @@ void dp_clients_remove_client(struct proc *p)
 			        "table in remove client");
 	}
 
-	if (!p->has_directpath) {
+	if (!p->has_directpath && !cfg.af_xdp) {
 		if (!p->attach_fail) {
 			do_dpdk_dma_unmap(p->region.base, p->region.len,
 				          proc_pgsize(p), p->page_paddrs);

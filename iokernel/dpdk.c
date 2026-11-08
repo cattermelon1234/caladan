@@ -280,7 +280,13 @@ int dpdk_init(void)
 	ARGV(buf);
 	ARGV("--socket-mem=128");
 
-	if (cfg.vfio_directpath) {
+	if (cfg.af_xdp) {
+		/*
+		 * EAL only: it still pins the dataplane core and backs rte_hash,
+		 * but AF_XDP drives the NIC, so DPDK must not probe any device.
+		 */
+		ARGV("--no-pci");
+	} else if (cfg.vfio_directpath) {
 		ARGV("--vdev=net_tap0");
 		ARGV("--allow");
 		ARGV("0000:00:00.0");
@@ -309,7 +315,8 @@ int dpdk_init(void)
 	}
 
 	/* check that there is a port to send/receive on */
-	if (!cfg.vfio_directpath && !rte_eth_dev_is_valid_port(DPDK_PORT)) {
+	if (!cfg.vfio_directpath && !cfg.af_xdp &&
+	    !rte_eth_dev_is_valid_port(DPDK_PORT)) {
 		log_err("dpdk: no available ports");
 		return -1;
 	}
@@ -317,7 +324,7 @@ int dpdk_init(void)
 	if (rte_lcore_count() > 1)
 		log_warn("dpdk: too many lcores enabled, only 1 used");
 
-	if (!cfg.vfio_directpath) {
+	if (!cfg.vfio_directpath && !cfg.af_xdp) {
 		dp.port = DPDK_PORT;
 		ret = rte_eth_dev_info_get(DPDK_PORT, &dev_info);
 		if (unlikely(ret)) {
@@ -429,6 +436,10 @@ int dpdk_late_init(void)
 		dp.dataplane_mode = IOK_NET_MODE_VFIO_MLX5;
 		return 0;
 	}
+
+	/* afxdp_init() sets up the NIC instead */
+	if (cfg.af_xdp)
+		return 0;
 
 	/* initialize port */
 	if (dpdk_port_init(dp.port, dp.rx_mbuf_pool) != 0) {

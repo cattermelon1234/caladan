@@ -12,3 +12,6 @@ CONFIG_CLANG=n
 CONFIG_SPLIT_TX=n
 # Don't compile with UINTR instructions (useful for out-of-date compilers)
 CONFIG_NO_UINTR=n
+# Build the iokernel's AF_XDP packet I/O backend (needs libxdp; see
+# tools/af_xdp_probe/cloudlab/install_libxdp.sh)
+CONFIG_AF_XDP=n

@@ -80,6 +80,12 @@ ifeq ($(CONFIG_SPLIT_TX),y)
 FLAGS += -DSPLIT_TX
 endif
 
+ifeq ($(CONFIG_AF_XDP),y)
+FLAGS += -DAF_XDP
+# install_libxdp.sh installs libxdp and libbpf under /usr/local
+PKG_CONFIG_PATH := $(PKG_CONFIG_PATH):/usr/local/lib/pkgconfig
+endif
+
 CFLAGS = -std=gnu11 $(FLAGS)
 CXXFLAGS = -std=gnu++20 $(FLAGS)
 

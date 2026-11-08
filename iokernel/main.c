@@ -16,6 +16,7 @@
 
 #include "defs.h"
 #include "sched.h"
+#include "afxdp.h"
 
 #define LOG_INTERVAL_US		(1000 * 1000)
 struct iokernel_cfg cfg;
@@ -62,6 +63,7 @@ static const struct init_entry iok_init_handlers[] = {
 	IOK_INITIALIZER(tx),
 	IOK_INITIALIZER(dp_clients),
 	IOK_INITIALIZER(dpdk_late),
+	IOK_INITIALIZER(afxdp),
 	IOK_INITIALIZER(directpath),
 	IOK_INITIALIZER(hw_timestamp),
 	IOK_INITIALIZER(dma),
@@ -115,6 +117,40 @@ static void dataplane_loop_vfio(void)
 
 		STAT_INC(LOOPS, 1);
 	}
+}
+
+/*
+ * The dataplane loop when AF_XDP does packet I/O instead of DPDK.
+ *
+ * RX only for now: packets are received and recycled but not yet delivered
+ * to runtimes, so there are no frame returns (commands_rx) and no TX here.
+ */
+static void dataplane_loop_afxdp(void)
+{
+	bool work_done;
+
+	log_info("main: core %u running AF_XDP dataplane. [Ctrl+C to quit]",
+			rte_lcore_id());
+	fflush(stdout);
+
+	while (!afxdp_stop_requested()) {
+		work_done = false;
+
+		/* handle a burst of ingress packets */
+		work_done |= afxdp_rx_poll();
+
+		/* adjust core assignments */
+		sched_poll();
+
+		/* handle control messages */
+		if (!work_done)
+			dp_clients_rx_control_lrpcs();
+
+		afxdp_log_stats();
+		STAT_INC(LOOPS, 1);
+	}
+
+	afxdp_shutdown();
 }
 
 /*
@@ -182,6 +218,43 @@ static void print_usage(void)
 	printf("\tsimple: a simplified scheduler policy intended for testing\n");
 	printf("\tias: the Caladan scheduler policy (manages CPU interference)\n");
 	printf("\tnuma: an incomplete and experimental policy for NUMA architectures\n");
+	printf("options include: afxdp IFACE QUEUE copy|zc (AF_XDP instead of DPDK)\n");
+}
+
+/* parses "afxdp IFACE QUEUE copy|zc"; returns the number of arguments used */
+static int parse_afxdp_args(int argc, char *argv[], int i)
+{
+	char *end;
+	unsigned long queue;
+
+	if (i + 3 >= argc) {
+		fprintf(stderr, "usage: afxdp IFACE QUEUE copy|zc\n");
+		return -EINVAL;
+	}
+
+	afxdp_cfg.ifname = argv[i + 1];
+
+	errno = 0;
+	queue = strtoul(argv[i + 2], &end, 10);
+	if (errno || end == argv[i + 2] || *end || queue > UINT32_MAX ||
+	    argv[i + 2][0] == '-') {
+		fprintf(stderr, "afxdp: invalid queue id: %s\n", argv[i + 2]);
+		return -EINVAL;
+	}
+	afxdp_cfg.queue_id = queue;
+
+	if (!strcmp(argv[i + 3], "copy")) {
+		afxdp_cfg.zero_copy = false;
+	} else if (!strcmp(argv[i + 3], "zc")) {
+		afxdp_cfg.zero_copy = true;
+	} else {
+		fprintf(stderr, "afxdp: mode must be copy or zc, not %s\n",
+			argv[i + 3]);
+		return -EINVAL;
+	}
+
+	cfg.af_xdp = true;
+	return 3;
 }
 
 int main(int argc, char *argv[])
@@ -240,6 +313,15 @@ int main(int argc, char *argv[])
 			return -EINVAL;
 #endif
 			cfg.vfio_directpath = true;
+		} else if (!strcmp(argv[i], "afxdp")) {
+#ifndef AF_XDP
+			log_err("please recompile with CONFIG_AF_XDP=y");
+			return -EINVAL;
+#endif
+			ret = parse_afxdp_args(argc, argv, i);
+			if (ret < 0)
+				return ret;
+			i += ret;
 		} else if (!strcmp(argv[i], "bwlimit")) {
 			if (i == argc - 1) {
 				fprintf(stderr, "missing bwlimit argument\n");
@@ -288,6 +370,11 @@ int main(int argc, char *argv[])
 		}
 	}
 
+	if (cfg.af_xdp && (cfg.vfio_directpath || nic_pci_addr_str)) {
+		fprintf(stderr, "afxdp can't be combined with vfio or nicpci\n");
+		return -EINVAL;
+	}
+
 	ret = uname(&utsname);
 	if (ret < 0) {
 		log_err("failed to get utsname");
@@ -317,7 +404,9 @@ int main(int argc, char *argv[])
 
 	ksched_uintr_init();
 
-	if (cfg.vfio_directpath)
+	if (cfg.af_xdp)
+		dataplane_loop_afxdp();
+	else if (cfg.vfio_directpath)
 		dataplane_loop_vfio();
 	else
 		dataplane_loop();

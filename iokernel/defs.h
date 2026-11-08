@@ -35,6 +35,9 @@ enum {
 	// High performance.
 	IOK_NET_MODE_DPDK_MLX5,
 	IOK_NET_MODE_VFIO_MLX5,
+
+	// Linux AF_XDP socket instead of DPDK (see afxdp.c).
+	IOK_NET_MODE_AF_XDP,
 };
 
 /*
@@ -54,6 +57,7 @@ struct iokernel_cfg {
 	bool	directpath_active_rss; /* vfio directpath: keep all qs active */
 	bool	azure_arp_mode; /* support Azure by responding to local ARP messages */
 	bool	no_hugepages; /* disable use of reserved hugepages for directpath */
+	bool	af_xdp; /* use AF_XDP instead of DPDK for packet I/O */
 } __aligned(CACHE_LINE_SIZE);
 
 extern struct iokernel_cfg cfg;

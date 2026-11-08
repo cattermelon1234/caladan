@@ -42,6 +42,11 @@ PCM_LIBS = -lm -lstdc++
 # dpdk libs
 DPDK_LIBS=$(shell PKG_CONFIG_PATH=$(PKG_CONFIG_PATH) pkg-config --libs --static libdpdk)
 
+# AF_XDP backend libs (libxdp bundles the libbpf it needs)
+ifeq ($(CONFIG_AF_XDP),y)
+AF_XDP_LIBS = $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_PATH) pkg-config --libs libxdp)
+$(iokernel_obj): INC += $(shell PKG_CONFIG_PATH=$(PKG_CONFIG_PATH) pkg-config --cflags libxdp)
+endif
 
 # must be first
 all: libbase.a libnet.a libruntime.a iokerneld $(test_targets) shim
@@ -61,7 +66,7 @@ libruntime.a: $(runtime_obj)
 	$(AR) rcs $@ $^
 
 iokerneld: $(iokernel_obj) libbase.a libnet.a base/base.ld $(PCM_DEPS)
-	$(LD) $(LDFLAGS) -o $@ $(iokernel_obj) libbase.a libnet.a $(DPDK_LIBS) \
+	$(LD) $(LDFLAGS) -o $@ $(iokernel_obj) libbase.a libnet.a $(DPDK_LIBS) $(AF_XDP_LIBS) \
 	$(PCM_DEPS) $(PCM_LIBS) -lpthread -lnuma -ldl
 
 $(test_targets): $(test_obj) libbase.a libruntime.a libnet.a base/base.ld
