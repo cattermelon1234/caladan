@@ -32,9 +32,10 @@ Its PCI address is `0000:03:00.1`. Management traffic uses a different NIC.
 | Probe simulator on macOS | 19 passed, 0 failed |
 | Upstream dependencies, IOKernel, runtime test binaries, and ksched | Built on hp077 and hp079 |
 | Native probe build and simulator on both nodes | Built; 19 passed, 0 failed on each |
-| DPDK IOKernel on hp077's physical NIC | Initialized successfully with the verbs capability patch below |
+| DPDK IOKernel on both physical NICs | Initialized successfully with the verbs capability patch below |
 | `tests/test_tcp_read server.config` on hp077 | Passed; exercises TCP through the runtime and local IOKernel delivery |
 | hp079 ping to hp077's Caladan runtime at `192.168.1.3` | 3 sent, 3 received; verifies physical NIC RX/TX through the IOKernel and runtime |
+| hp077 ping to hp079's Caladan runtime at `192.168.1.7` | 3 sent, 3 received |
 | AF_XDP copy mode on hp079, queue 0 | 50,014 packets; 50,011 UDP and 3 ARP |
 | AF_XDP zero-copy mode on hp079, queue 20 | 50,027 UDP packets; socket mode verified |
 
@@ -47,7 +48,8 @@ benchmarks. RSS, temporary flow rules, and MTU were restored after testing.
 
 Logs are in `/tmp/caladan-current-*.log` on the tested nodes. Important files
 include `deps`, `build`, `ksched`, `iokernel`, `tcp-read`, `runtime-ping`,
-`af-copy`, and `af-zero-copy` logs. `/tmp` files are lost when nodes reboot.
+`af-copy`, and `af-zero-copy` logs. The final hp079 baseline logs are in
+`/tmp/caladan-current-baseline-ni0r4q4h/`. `/tmp` files are lost when nodes reboot.
 
 ## Building the upstream baseline on these nodes
 
@@ -79,7 +81,10 @@ sudo ./scripts/setup_machine.sh nouintr
 `make submodules` is the initial dependency setup command. Upstream applies
 patches with `git am`; rerunning it in an already patched checkout is not
 an incremental rebuild. The two prepared CloudLab checkouts already have
-their dependencies built.
+their dependencies built. They retain `CONFIG_NO_UINTR=y` as a local build
+configuration change. Upstream commits patches inside its submodules, so
+`git status` also reports changed submodule commits after building; keep the
+superproject gitlinks pinned to their upstream revisions.
 
 ### Mellanox verbs compatibility patch
 
